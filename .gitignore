@@ -1,0 +1,9 @@
+# private / runtime files created by app.py: never commit or publish these
+.env
+admin_config.json
+enquiries/
+backups/
+_build/
+.xlsx_stamp
+__pycache__/
+*.pyc

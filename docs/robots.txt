@@ -1,0 +1,6 @@
+User-agent: *
+Allow: /
+Disallow: /crafty/admin/
+Disallow: /crafty/api/
+
+Sitemap: https://prashanthchowdaryy.github.io/crafty/sitemap.xml

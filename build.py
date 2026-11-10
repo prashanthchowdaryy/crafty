@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """Reads products.json (managed from the /admin panel) and inventory.xlsx (Blog sheet) and rebuilds the whole website (pages, product pages, blog, sitemap).
-Run with:  python build.py   (or double-click update.bat)"""
-import os, re, html, json, shutil
+Run with:  python build.py                    (local / backend hosting, site at "/", writes into this folder; or double-click update.bat)
+           python build.py --github-pages     (static GitHub Pages version at /crafty/, written to the docs/ folder; or double-click build-github-pages.bat)
+Settings can also come from environment variables: BASE_PATH, SITE_ORIGIN, STATIC_ENQUIRY, OUT_DIR (see the GITHUB PAGES block below)."""
+import os, re, sys, html, json, shutil
 from datetime import date, datetime
 from urllib.parse import quote
 from openpyxl import load_workbook
 
 # ---------------- EDIT THESE ----------------
-SITE = "https://www.virasat.in"          # your real domain, no slash at the end
+SITE = "https://www.virasat.in"          # your real domain, no slash at the end (used by the normal/local build)
 NAME = "Crafty Korner India"
 WA = "918439136097"                      # country code + number, no + or spaces
 PHONE = "+91 84391 36097"
@@ -20,6 +22,19 @@ INSTAGRAM = ""   # paste your full Instagram link; leave empty to hide the icon
 FACEBOOK = ""    # full Facebook link; empty = hidden
 YOUTUBE = ""     # full YouTube link; empty = hidden
 # --------------------------------------------
+# ---------------- GITHUB PAGES / DEPLOYMENT SETTINGS ----------------
+# A normal build (python build.py) is unchanged: site at "/", enquiry forms post to the Flask API, files are written into this folder.
+# The GitHub Pages build (python build.py --github-pages) is a preset for the four settings below.
+GH_PRESET = dict(BASE_PATH="/crafty/", SITE_ORIGIN="https://prashanthchowdaryy.github.io", STATIC_ENQUIRY="1", OUT_DIR="docs")
+if "--github-pages" in sys.argv:
+    for _k, _v in GH_PRESET.items(): os.environ.setdefault(_k, _v)   # an environment variable you set yourself still wins
+BASE = "/" + os.environ.get("BASE_PATH", "/").strip().strip("/") + "/"    # always starts and ends with "/": "/" or "/crafty/"
+BASE = "/" if BASE == "//" else BASE
+SITE = (os.environ.get("SITE_ORIGIN", "").strip() or SITE).rstrip("/") + BASE.rstrip("/")  # canonical / Open Graph / sitemap base, e.g. https://prashanthchowdaryy.github.io/crafty
+STATIC_ENQUIRY = os.environ.get("STATIC_ENQUIRY", "0").strip() == "1"   # True on GitHub Pages: forms open WhatsApp instead of calling /api/enquiry
+OUT = os.environ.get("OUT_DIR", ".").strip() or "."               # where the finished site is written ("." = this folder)
+MEDIA_DIR = os.environ.get("MEDIA_DIR", "media")
+# ---------------------------------------------------------------------
 GLOBAL_KW = ("Crafty Korner India, handicrafts Hyderabad, wooden handicrafts, Shilparamam handicrafts, handmade wooden furniture Hyderabad, "
   "carved wooden furniture, Indian handicrafts online, wooden home decor, antique shop Hyderabad, antique furniture Hyderabad, "
   "inlay work furniture, wooden serving trays, wooden stools, wooden wall clocks, console table, wooden gifts, custom wooden furniture India, "
@@ -62,7 +77,7 @@ for r in json.load(open("products.json", encoding="utf-8")):
     it = dict(name=str(r["name"]).strip(), slug=s, cat=r.get("category") or "Antiques", sold=(st == "Sold"),
               price=price, mat=str(r.get("material") or ""), era=str(r.get("era") or ""),
               size=str(r.get("size") or ""), desc=str(r.get("description") or ""), img=str(r.get("photo") or ""), more=[x for x in (r.get("more") or []) if x])
-    if not os.path.exists(os.path.join(os.environ.get("MEDIA_DIR", "media"), it["img"])): print("WARNING: photo not found in media/:", it["img"], "for", it["name"])
+    if not os.path.exists(os.path.join(MEDIA_DIR, it["img"])): print("WARNING: photo not found in media/:", it["img"], "for", it["name"])
     items.append(it)
 items.sort(key=lambda i: i["sold"])
 
@@ -112,9 +127,14 @@ def nav_html(path):
             f'<div class="dd"><a href="/collection/"{cur(coll_on)}>Collections</a><button type="button" class="dd-btn" aria-label="Show collections" aria-expanded="false">{ico(I["down"])}</button><div class="dd-menu">{menu}</div></div>'
             f'<a href="/custom-orders/"{cur(path.startswith("/custom-orders/"))}>Custom Orders</a><a href="/about/"{cur(path.startswith("/about/"))}>Our Story</a>'
             f'<a href="/blog/"{cur(path.startswith("/blog/"))}>Blog</a><a href="/visit/"{cur(path.startswith("/visit/"))}>Visit Us</a>')
+ROOT_ATTR = re.compile(r'\b(href|src|action|data-src)="/(?!/)')
+def with_base(content):
+    """Every page leaves through here: root-relative links and assets ("/style.css", "/collection/") get the base path ("/crafty/").
+    External links (https://, tel:, mailto:, wa.me) never start with a single "/", so they are left alone. With BASE "/" nothing changes."""
+    return content if BASE == "/" else ROOT_ATTR.sub(lambda m: f'{m.group(1)}="{BASE}', content)
 def out(path, content):
-    d = path.strip("/"); os.makedirs(d or ".", exist_ok=True)
-    open(os.path.join(d, "index.html"), "w", encoding="utf-8").write(content)
+    d = os.path.join(OUT, path.strip("/")); os.makedirs(d, exist_ok=True)
+    open(os.path.join(d, "index.html"), "w", encoding="utf-8").write(with_base(content))
 
 IMGS = {}
 def fit_title(t, n=68):
@@ -178,7 +198,7 @@ def page(path, title, desc, body, schema=(), img="/media/og-virasat.jpg", og="we
   <p>© {date.today().year} {NAME}. Handcrafts, furniture and antiques.</p>
 </footer>
 <a class="wa" href="{wa("Hello Crafty Korner India, I found your website and would like to know more.")}" aria-label="Chat on WhatsApp">WhatsApp</a>
-<script src="/script.js" data-wa="{WA}" defer></script>
+<script src="/script.js" data-wa="{WA}" data-base="{BASE}" data-enquiry="{"whatsapp" if STATIC_ENQUIRY else "api"}" data-site="{SITE}" defer></script>
 </body>
 </html>'''
     out(path, doc)
@@ -194,7 +214,7 @@ def enq_form(kind, product="", url="", msg="", extra=False, fid="", ph="Tell us 
             '<label>Photos <small>(optional, up to 4)</small><input name="photos" type="file" accept="image/*" multiple></label>'
             '<div class="hp" aria-hidden="true"><label>Website<input name="website" tabindex="-1" autocomplete="off"></label></div>'
             f'<button class="btn gold" type="submit">{btn}</button><p class="enq-msg" role="status" aria-live="polite"></p>'
-            f'<p class="note">We reply on the number you give. Prefer chat? <a href="{wa("Hello Crafty Korner India, I would like to know more.")}" rel="noopener">Message us on WhatsApp</a>.</p></form>')
+            f'<p class="note">{"Sending opens WhatsApp with your details ready to send. " if STATIC_ENQUIRY else ""}We reply on the number you give. Prefer chat? <a href="{wa("Hello Crafty Korner India, I would like to know more.")}" rel="noopener">Message us on WhatsApp</a>.</p></form>')
 
 def crumbs(trail):
     vis = " / ".join(f'<a href="{u}">{e(t)}</a>' for u, t in trail[:-1]) + (" / " if len(trail) > 1 else "") + e(trail[-1][1])
@@ -221,8 +241,13 @@ def postcard(p):
             f'<p class="psum">{e(p["summary"])}</p><div class="pmeta"><span>{ico(I["cal"])}<time datetime="{p["date"]}">{p["date"].strftime("%b %d, %Y")}</time></span><span>{ico(I["clock"])}{p["mins"]} min read</span></div></article>')
 
 # wipe generated folders so deleted items disappear
-for d in ["collection", "blog", "antiques", "handmade-wood", "furniture", "handicrafts", "home-decor", "custom-orders", "about", "visit"]:
-    shutil.rmtree(d, ignore_errors=True)
+if OUT != ".":   # separate output folder (GitHub Pages build): start from an empty folder, but never wipe anything outside this project
+    _o = os.path.abspath(OUT)
+    if not _o.startswith(os.getcwd() + os.sep): sys.exit("OUT_DIR must be a folder inside the project: " + OUT)
+    shutil.rmtree(_o, ignore_errors=True); os.makedirs(_o)
+else:
+    for d in ["collection", "blog", "antiques", "handmade-wood", "furniture", "handicrafts", "home-decor", "custom-orders", "about", "visit"]:
+        shutil.rmtree(d, ignore_errors=True)
 
 STORE = {"@context": "https://schema.org", "@type": ["Store", "LocalBusiness"], "name": NAME, "logo": SITE + "/logo.png", "areaServed": "India", "keywords": GLOBAL_KW, "url": SITE + "/", "telephone": [PHONE, PHONE2], "email": EMAIL, "sameAs": [u for u in (INSTAGRAM, FACEBOOK, YOUTUBE) if u],
   "image": SITE + "/media/og-virasat.jpg", "description": "Handmade wooden handicrafts, carved furniture, home decor, gifts and antiques at Shilparamam, Madhapur, Hyderabad. Custom orders and delivery across India.",
@@ -348,15 +373,27 @@ for p in posts:
 
 # ---------- 404, sitemap, robots ----------
 page("/404-page/", "Page not found | " + NAME, "Page not found.", '<section class="wrap article"><h1>This page is not here</h1><p>Try the <a href="/collection/">collection</a> or go back to the <a href="/">home page</a>.</p></section>', index=False)
-os.replace("404-page/index.html", "404.html"); shutil.rmtree("404-page")
-_h = open("404.html", encoding="utf-8").read()   # the error page has no address of its own: no canonical / hreflang / og:url
+_404 = os.path.join(OUT, "404.html")
+os.replace(os.path.join(OUT, "404-page", "index.html"), _404); shutil.rmtree(os.path.join(OUT, "404-page"))
+_h = open(_404, encoding="utf-8").read()   # the error page has no address of its own: no canonical / hreflang / og:url
 _h = re.sub(r'<link rel="(?:canonical|alternate)"[^>]*404-page/">\n?', "", _h); _h = re.sub(r'<meta property="og:url" content="[^"]*404-page/">', "", _h)
-open("404.html", "w", encoding="utf-8").write(_h)
+open(_404, "w", encoding="utf-8").write(_h)
 today = date.today().isoformat()
 def _u(u):
     ims = "".join(f"<image:image><image:loc>{SITE}{e(x)}</image:loc></image:image>" for x in IMGS.get(u, []))
     return f"<url><loc>{SITE}{u}</loc><lastmod>{today}</lastmod>{ims}</url>\n"
-open("sitemap.xml", "w", encoding="utf-8").write('<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:image="http://www.google.com/schemas/sitemap-image/1.1">\n' +
+open(os.path.join(OUT, "sitemap.xml"), "w", encoding="utf-8").write('<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:image="http://www.google.com/schemas/sitemap-image/1.1">\n' +
     "".join(_u(u) for u in URLS) + "</urlset>\n")
-open("robots.txt", "w").write(f"User-agent: *\nAllow: /\nDisallow: /admin/\nDisallow: /api/\n\nSitemap: {SITE}/sitemap.xml\n")
-print(f"Done: {len(items)} items, {len(posts)} blog posts, {len(URLS)} pages in sitemap.")
+open(os.path.join(OUT, "robots.txt"), "w").write(f"User-agent: *\nAllow: /\nDisallow: {BASE}admin/\nDisallow: {BASE}api/\n\nSitemap: {SITE}/sitemap.xml\n")
+open(os.path.join(OUT, "site.webmanifest"), "w", encoding="utf-8").write(json.dumps({
+    "name": NAME, "short_name": "Crafty Korner", "description": "Handmade wooden handicrafts, furniture and antiques from Shilparamam, Hyderabad.",
+    "start_url": BASE, "scope": BASE, "display": "standalone", "background_color": "#F6EEE2", "theme_color": "#4A2512",
+    "icons": [{"src": BASE + "icon-192.png", "sizes": "192x192", "type": "image/png"}, {"src": BASE + "icon-512.png", "sizes": "512x512", "type": "image/png"}]}, indent=2) + "\n")
+
+# separate output folder: copy the public static files next to the pages so the folder can be published as it is
+if OUT != ".":
+    for f in ("style.css", "script.js", "favicon.ico", "favicon-32.png", "icon-192.png", "icon-512.png", "apple-touch-icon.png", "logo.png", "logo-mark.png"):
+        shutil.copy(f, os.path.join(OUT, f))
+    shutil.copytree(MEDIA_DIR, os.path.join(OUT, "media"))
+    open(os.path.join(OUT, ".nojekyll"), "w").close()   # tell GitHub Pages to publish the files as they are (no Jekyll processing)
+print(f"Done: {len(items)} items, {len(posts)} blog posts, {len(URLS)} pages in sitemap.  Base path: {BASE}  Site: {SITE}/  Written to: {os.path.abspath(OUT)}")

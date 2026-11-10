@@ -67,7 +67,7 @@ def rebuild():
     """Build into a scratch folder, then swap the finished pages in, so visitors never see a half-built site."""
     w = P("_build"); shutil.rmtree(w, ignore_errors=True); os.makedirs(w)
     for f in ("build.py", "products.json", "inventory.xlsx"): shutil.copy(P(f), w)
-    r = subprocess.run([sys.executable, "build.py"], cwd=w, capture_output=True, text=True, timeout=180, env={**os.environ, "MEDIA_DIR": MEDIA})
+    r = subprocess.run([sys.executable, "build.py"], cwd=w, capture_output=True, text=True, timeout=180, env={**{k: v for k, v in os.environ.items() if k not in ("BASE_PATH", "SITE_ORIGIN", "STATIC_ENQUIRY", "OUT_DIR")}, "MEDIA_DIR": MEDIA})
     if r.returncode: raise RuntimeError((r.stderr or r.stdout)[-600:])
     for g in GENERATED:
         src, dst = os.path.join(w, g), P(g)
